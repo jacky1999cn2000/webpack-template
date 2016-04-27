@@ -4,7 +4,7 @@ survivejs-kanban这本书里面讲了如何使用webpack作为building tool来�
 
 下面分两部分来解释 *webpack.config.js* 的演化过程
 
-### development
+### Before
 
 这是不考虑build前的 *webpack.config.js* 文件。
 
@@ -169,5 +169,182 @@ if(TARGET === 'build') {
     "react-dnd-html5-backend": "^2.1.2",
     "react-dom": "^0.14.7"
   }
+}
+```
+
+### After
+
+这是要考虑build的 *webpack.config.js* 文件
+
+注释:
+
+1. Minification
+  * webpack.optimize.UglifyJsPlugin用来minify js文件
+  * webpack.DefinePlugin将`process.env.NODE_ENV`设置成了`production`,这样React自己会做一些优化(比如取消property type checks等)
+2. Splitting app and vendor Bundles
+  * package.json文件中有dependencies和devDependencies的划分,这里将所有dependencies里的东西弄成一个vendor.js(要检查dependencies和devDependencies是否分类准确)
+  * 将package.json文件load进来
+  * 修改common object中的output设置,将输出文件命名为entry name
+  * 在TARGET=build里增加一个名为vendor的entry
+  * 在TARGET=build里使用CommonsChunkPlugin,将app.js中的相关code抽离出来放到vendor.js当中,并生成一个manifest文件(该文件告知webpack哪些module对应哪些文件)
+  * 此例中alt-utils这个dependency因为自己的问题不能被放入vendor.js文件里,所以代码中做了处理
+3. Adding Hashes to Filenames
+  * webpack自带一些placeholder,比如[name]返回entry name,[hash]返回build hash,[chunkhash]返回chunk hash
+  * 使用这些placeholder可以生成诸如`app.d587bbd6e38337f5accd.js`,`vendor.dc746a5db4ed650296e1.js`这样的文件
+  * 每次build时候,如果文件内容变化,则chunkhash也会变化,这样的话其实就是变相的invalidate了浏览器的cache,浏览器就可以request新的文件
+  * 在TARGET=build里面加入output参数,里面重新定义filename的格式,并定义chunkFilename
+4. Generating index.html through html-webpack-plugin
+  * 安装 html-webpack-template 和 html-webpack-plugin
+  * 删除./build/index.html文件,因为html-webpack-plugin会帮我们生成
+  * config文件里引入html-webpack-plugin
+  * 在common object中加入HtmlWebpackPlugin的定义
+  * 在TARGET=start里面删除devServer中这个设置:contentBase: PATHS.build
+5. Cleaning the Build
+  * 安装clean-webpack-plugin
+  * config文件里引用clean-webpack-plugin
+  * 在TARGET=build里面增加CleanPlugin(注意放在第一位,这样每次build的时候就先清理build文件夹)
+6. Separating CSS
+  * 目的是在build的时候把.css文件和.js文件区分开
+  * 安装 extract-text-webpack-plugin
+  * 因为extract-text-webpack-plugin和Hot Module Replacement (HMR)不兼容,所以我们只用在build时候,因此需要把对.css文件处理的loader从common object中移除,分别在start和build中定义
+  * config文件中引用extract-text-webpack-plugin
+  * 将common object中对于.css文件处理的loader删除,放在start里面
+  * 在build里面设置一个新的处理.css文件的loader,并使用ExtractTextPlugin
+  * 在build的plugins中添加ExtractTextPlugin用来.css文件控制输出格式
+7. Analyzing Build Statistics
+  * 在package.json的scripts中添加`"stats": "webpack --profile --json > stats.json"`
+  * 将config文件中这一行改成`if(TARGET === 'build' || TARGET === 'stats')`
+  * 运行npm run stats命令会生成一个stats.json文件,然后在 http://webpack.github.io/analyse/ 里上传这个文件, 看一些分析结果
+
+```javascript
+const path = require('path');
+const merge = require('webpack-merge');
+const webpack = require('webpack');
+const NpmInstallPlugin = require('npm-install-webpack-plugin');
+const HtmlWebpackPlugin = require('html-webpack-plugin');
+const CleanPlugin = require('clean-webpack-plugin');
+const ExtractTextPlugin = require('extract-text-webpack-plugin');
+
+const pkg = require('./package.json');
+
+const TARGET = process.env.npm_lifecycle_event;
+const PATHS = {
+  app: path.join(__dirname, 'app'),
+  build: path.join(__dirname, 'build')
+};
+
+process.env.BABEL_ENV = TARGET;
+
+const common = {
+  entry: {
+    app: PATHS.app
+  },
+  resolve: {
+    extensions: ['', '.js', '.jsx']
+  },
+  output: {
+    path: PATHS.build,
+    filename: '[name].js'
+  },
+  module: {
+    loaders: [
+      {
+        test: /\.jsx?$/,
+        loaders: ['babel?cacheDirectory'],
+        include: PATHS.app
+      }
+    ]
+  },
+  plugins: [
+    new HtmlWebpackPlugin({
+      template: 'node_modules/html-webpack-template/index.ejs',
+      title: 'Kanban app',
+      appMountId: 'app',
+      inject: false
+    })
+  ]
+};
+
+if(TARGET === 'start' || !TARGET) {
+  module.exports = merge(common, {
+    devtool: 'eval-source-map',
+    devServer: {
+
+      historyApiFallback: true,
+      hot: true,
+      inline: true,
+      progress: true,
+
+      // display only errors to reduce the amount of output
+      stats: 'errors-only',
+
+      // parse host and port from env so this is easy
+      // to customize
+      host: process.env.HOST,
+      port: process.env.PORT
+    },
+    module: {
+      loaders: [
+        // Define development specific CSS setup
+        {
+          test: /\.css$/,
+          loaders: ['style', 'css'],
+          include: PATHS.app
+        }
+      ]
+    },
+    plugins: [
+      new webpack.HotModuleReplacementPlugin(),
+      new NpmInstallPlugin({
+        save: true // --save
+      })
+    ]
+  });
+}
+
+if(TARGET === 'build' || TARGET === 'stats') {
+  module.exports = merge(common, {
+    entry: {
+      vendor: Object.keys(pkg.dependencies).filter(function(v) {
+        // Exclude alt-utils as it won't work with this setup
+        // due to the way the package has been designed
+        // (no package.json main).
+        return v !== 'alt-utils';
+      })
+    },
+    output: {
+      path: PATHS.build,
+      filename: '[name].[chunkhash].js',
+      chunkFilename: '[chunkhash].js'
+    },
+    module: {
+      loaders: [
+        // Extract CSS during build
+        {
+          test: /\.css$/,
+          loader: ExtractTextPlugin.extract('style', 'css'),
+          include: PATHS.app
+        }
+      ]
+    },
+    plugins: [
+      new CleanPlugin([PATHS.build]),
+      // Output extracted CSS to a file
+      new ExtractTextPlugin('[name].[chunkhash].css'),
+      // Extract vendor and manifest files
+      new webpack.optimize.CommonsChunkPlugin({
+        names: ['vendor', 'manifest']
+      }),
+      // Setting DefinePlugin affects React library size!
+      new webpack.DefinePlugin({
+        'process.env.NODE_ENV': '"production"'
+      }),
+      new webpack.optimize.UglifyJsPlugin({
+        compress: {
+          warnings: false
+        }
+      })
+    ]
+  });
 }
 ```
