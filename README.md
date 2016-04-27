@@ -176,9 +176,9 @@ if(TARGET === 'build') {
 
 这是要考虑build的 *webpack.config.js* 文件
 
-npm start: 进入开发模式
-npm run build: 在build文件夹里生成各种文件,然后可以用serve工具来serve
-npm run stats: 在build文件夹里生成各种文件,并生成一个stats.json文件
+ * npm start: 进入开发模式
+ * npm run build: 在build文件夹里生成各种文件,然后可以用serve工具来serve
+ * npm run stats: 在build文件夹里生成各种文件,并生成一个stats.json文件
 
 注释:
 
