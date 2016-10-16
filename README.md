@@ -352,3 +352,9 @@ if(TARGET === 'build' || TARGET === 'stats') {
   });
 }
 ```
+
+10.14.2016
+P.S.
+http://survivejs.com/webpack/building-with-webpack/splitting-bundles/
+http://survivejs.com/webpack/advanced-techniques/understanding-chunks/
+http://stackoverflow.com/questions/39548175/can-someone-explain-webpacks-commonschunkplugin/39600793
